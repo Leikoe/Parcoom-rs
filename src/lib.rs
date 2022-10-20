@@ -28,7 +28,7 @@ fn input_sub(start: usize, len: usize, s: &ParserInput) -> ParserInput {
     }
 }
 
-fn fail<'a, T>(e: ParserError) -> Parser<'a, T> {
+fn fail<'a, T>(e: String) -> Parser<'a, T> {
     Parser {
         run: Arc::new(move |input| {
             let e = e.clone();
@@ -263,10 +263,13 @@ fn make_input(s: String) -> ParserInput {
     ParserInput { text: s, pos: 0 }
 }
 
-fn run<A>(p: Parser<A>, input: String) -> Result<A, String> {
+fn run<A>(p: Parser<A>, input: String) -> Result<A, ParserError> {
     match (p.run)(make_input(input)) {
         (_, Ok(x)) => Ok(x),
-        (input, Err(desc)) => Err(desc),
+        (input, Err(desc)) => Err(ParserError {
+            pos: input.pos,
+            desc,
+        }),
     }
 }
 
