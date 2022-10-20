@@ -3,61 +3,59 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 #[derive(Clone)]
-struct Parser<T> {
-    run: Run<T>
+struct Parser<'a, T> {
+    run: Run<'a, T>,
 }
 
-type Run<T> = Arc<dyn Fn(ParserInput) -> (ParserInput, Result<T, String>)>;
+type Run<'a, T> = Arc<dyn 'a + Fn(ParserInput) -> (ParserInput, Result<T, ParserError>)>;
 
 #[derive(Debug, Clone)]
 struct ParserInput {
     text: String,
-    pos: usize
+    pos: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct ParserError {
     desc: String,
-    pos: usize
+    pos: usize,
 }
 
-fn input_sub (start: usize, len: usize, s: &ParserInput) -> ParserInput {
+fn input_sub(start: usize, len: usize, s: &ParserInput) -> ParserInput {
     ParserInput {
-        text: s.text[start..start+len].to_string(),
-        pos: s.pos+start
+        text: s.text[start..start + len].to_string(),
+        pos: s.pos + start,
     }
 }
 
-fn fail<T> (e: String) -> Parser<T> {
+fn fail<'a, T>(e: ParserError) -> Parser<'a, T> {
     Parser {
         run: Arc::new(move |input| {
             let e = e.clone();
             (input, Err(e))
-        })
+        }),
     }
 }
 
-fn wrap<T: Clone + 'static> (x: T) -> Parser<T> {
+fn wrap<'a, T: Clone + 'static>(x: T) -> Parser<'a, T> {
     Parser {
         run: Arc::new(move |input| {
             let x = x.clone();
             (input, Ok(x))
-        })
+        }),
     }
 }
 
-fn map<A: 'static, B: 'static> (f: Box<dyn Fn(A) -> B>, p: Parser<A>) -> Parser<B> {
+fn map<'a: 'b, 'b, A: 'a, B: 'b>(f: Box<dyn Fn(A) -> B>, p: Parser<'a, A>) -> Parser<'b, B> {
     Parser {
-        run: Arc::new(move |input| {
-            match (p.run)(input) {
-                (input_, Ok(x)) => (input_, Ok(f(x))),
-                (input_, Err(error)) => (input_, Err(error))
-            }
-        })
+        run: Arc::new(move |input| match (p.run)(input) {
+            (input_, Ok(x)) => (input_, Ok(f(x))),
+            (input_, Err(error)) => (input_, Err(error)),
+        }),
     }
 }
 
-fn parse_while (p: Box<dyn Fn(char) -> bool>) -> Parser<String> {
+fn parse_while<'a>(p: Box<dyn Fn(char) -> bool>) -> Parser<'a, String> {
     Parser {
         run: Arc::new(move |input| {
             let n = input.text.len();
@@ -66,23 +64,27 @@ fn parse_while (p: Box<dyn Fn(char) -> bool>) -> Parser<String> {
             while i < n && p(text[i] as char) {
                 i += 1;
             }
-            (input_sub(i, n-i, &input), Ok(input.text[0..i].to_string()))
-        })
+            (
+                input_sub(i, n - i, &input),
+                Ok(input.text[0..i].to_string()),
+            )
+        }),
     }
 }
 
-fn bind<A: 'static, B: 'static> (f: Box<dyn Fn(A) -> Parser<B>>, p: Parser<A>) -> Parser<B> {
+fn bind<'a: 'b, 'b, A: 'a, B: 'b>(
+    f: Box<dyn Fn(A) -> Parser<'b, B>>,
+    p: Parser<'b, A>,
+) -> Parser<'b, B> {
     Parser {
-        run: Arc::new(move |input| {
-            match (p.run)(input) {
-                (input_, Ok(x)) => ((f(x)).run)(input_),
-                (input_, Err(error)) => (input_, Err(error))
-            }
-        })
+        run: Arc::new(move |input| match (p.run)(input) {
+            (input_, Ok(x)) => ((f(x)).run)(input_),
+            (input_, Err(error)) => (input_, Err(error)),
+        }),
     }
 }
 
-fn prefix (prefix_str: &'static str) -> Parser<&str> {
+fn prefix(prefix_str: &'static str) -> Parser<&str> {
     Parser {
         run: Arc::new(move |input| {
             let unexpected_prefix_error = format!("expected {}", prefix_str).to_string();
@@ -95,25 +97,31 @@ fn prefix (prefix_str: &'static str) -> Parser<&str> {
                 let rest = input_sub(prefix_size, input_size - prefix_size, &input);
                 (rest, Ok(prefix_str))
             } else {
-                (input, Err(unexpected_prefix_error))
+                (
+                    input,
+                    Err(ParserError {
+                        desc: unexpected_prefix_error,
+                        pos: 0,
+                    }),
+                )
             }
-        })
+        }),
     }
 }
 
-fn optional<A: 'static> (p: Parser<A>) -> Parser<Option<A>> {
+fn optional<A: 'static>(p: Parser<A>) -> Parser<Option<A>> {
     Parser {
         run: Arc::new(move |input| {
             let (input_, result) = (p.run)(input);
             match result {
                 Ok(x) => (input_, Ok(Some(x))),
-                Err(_) => (input_, Ok(None))
+                Err(_) => (input_, Ok(None)),
             }
-        })
+        }),
     }
 }
 
-fn many_exact<A: 'static> (n: i32, p: Parser<A>) -> Parser<Vec<A>> {
+fn many_exact<A: 'static>(n: i32, p: Parser<A>) -> Parser<Vec<A>> {
     Parser {
         run: Arc::new(move |input| {
             let mut xs = Vec::new();
@@ -124,18 +132,18 @@ fn many_exact<A: 'static> (n: i32, p: Parser<A>) -> Parser<Vec<A>> {
                     Ok(x) => {
                         xs.push(x);
                         input_ = input__;
-                    },
+                    }
                     Err(e) => {
                         return (input__, Err(e));
                     }
                 }
             }
             (input_, Ok(xs))
-        })
+        }),
     }
 }
 
-fn many<A: 'static> (p: Parser<A>) -> Parser<Vec<A>> {
+fn many<A: 'static>(p: Parser<A>) -> Parser<Vec<A>> {
     Parser {
         run: Arc::new(move |input| {
             let mut xs = Vec::new();
@@ -146,36 +154,46 @@ fn many<A: 'static> (p: Parser<A>) -> Parser<Vec<A>> {
                 match result {
                     Ok(x) => {
                         xs.push(x);
-                    },
+                    }
                     Err(_) => {
                         break;
                     }
                 }
             }
             (input_, Ok(xs))
-        })
+        }),
     }
 }
 
-fn any_char () -> Parser<char> {
+fn any_char<'a>() -> Parser<'a, char> {
     Parser {
         run: Arc::new(|input| {
             let n = input.text.len();
             if n >= 1 {
-                (input_sub(1, n-1, &input), Ok(input.text.as_bytes()[0] as char))
+                (
+                    input_sub(1, n - 1, &input),
+                    Ok(input.text.as_bytes()[0] as char),
+                )
             } else {
-                let empty_input_error = format!("expected any char, got none (input.len() = {n}").to_string();
+                let empty_input_error =
+                    format!("expected any char, got none (input.len() = {n}").to_string();
 
-                (input, Err(empty_input_error))
+                (
+                    input,
+                    Err(ParserError {
+                        desc: empty_input_error,
+                        pos: 0,
+                    }),
+                )
             }
-        })
+        }),
     }
 }
 
-impl<B: 'static, A: 'static> ops::Shl<Parser<B>> for Parser<A> {
-    type Output = Parser<A>;
+impl<'a, 'b: 'a, B: 'a, A: 'a> ops::Shl<Parser<'b, B>> for Parser<'a, A> {
+    type Output = Parser<'a, A>;
 
-    fn shl(self, p2: Parser<B>) -> Self::Output {
+    fn shl(self, p2: Parser<'b, B>) -> Self::Output {
         Parser {
             run: Arc::new(move |input| {
                 let (input_, result) = (self.run)(input);
@@ -184,20 +202,19 @@ impl<B: 'static, A: 'static> ops::Shl<Parser<B>> for Parser<A> {
                         let (input__, result_) = (p2.run)(input_);
                         match result_ {
                             Ok(_) => (input__, Ok(x)),
-                            Err(e) => (input__, Err(e))
+                            Err(e) => (input__, Err(e)),
                         }
-                    },
-                    Err(e) => (input_, Err(e))
+                    }
+                    Err(e) => (input_, Err(e)),
                 }
-            })
+            }),
         }
     }
 }
 
-impl<B: 'static, A: 'static> ops::Shr<Parser<B>> for Parser<A> {
-    type Output = Parser<B>;
-
-    fn shr(self, p2: Parser<B>) -> Self::Output {
+impl<'a: 'b, 'b, B: 'a, A: 'a> ops::Shr<Parser<'b, B>> for Parser<'a, A> {
+    type Output = Parser<'b, B>;
+    fn shr(self, p2: Parser<'b, B>) -> Self::Output {
         Parser {
             run: Arc::new(move |input| {
                 let (input_, result) = (self.run)(input);
@@ -206,20 +223,20 @@ impl<B: 'static, A: 'static> ops::Shr<Parser<B>> for Parser<A> {
                         let (input__, result_) = (p2.run)(input_);
                         match result_ {
                             Ok(x) => (input__, Ok(x)),
-                            Err(e) => (input__, Err(e))
+                            Err(e) => (input__, Err(e)),
                         }
-                    },
-                    Err(e) => (input_, Err(e))
+                    }
+                    Err(e) => (input_, Err(e)),
                 }
-            })
+            }),
         }
     }
 }
 
-impl<B: 'static, A: 'static> ops::Add<Parser<B>> for Parser<A> {
-    type Output = Parser<(A, B)>;
+impl<'a: 'b, 'b, B: 'b, A: 'a> ops::Add<Parser<'b, B>> for Parser<'a, A> {
+    type Output = Parser<'b, (A, B)>;
 
-    fn add(self, p2: Parser<B>) -> Self::Output {
+    fn add(self, p2: Parser<'b, B>) -> Self::Output {
         Parser {
             run: Arc::new(move |input| {
                 let (input_, result) = (self.run)(input);
@@ -228,49 +245,45 @@ impl<B: 'static, A: 'static> ops::Add<Parser<B>> for Parser<A> {
                         let (input__, result_) = (p2.run)(input_);
                         match result_ {
                             Ok(x_) => (input__, Ok((x, x_))),
-                            Err(e) => (input__, Err(e))
+                            Err(e) => (input__, Err(e)),
                         }
-                    },
-                    Err(e) => (input_, Err(e))
+                    }
+                    Err(e) => (input_, Err(e)),
                 }
-            })
+            }),
         }
     }
 }
 
-impl<A: 'static> ops::BitOr<Parser<A>> for Parser<A> {
-    type Output = Parser<A>;
+impl<'a, A: 'a> ops::BitOr<Parser<'a, A>> for Parser<'a, A> {
+    type Output = Parser<'a, A>;
 
-    fn bitor(self, p2: Parser<A>) -> Self::Output {
+    fn bitor(self, p2: Parser<'a, A>) -> Self::Output {
         Parser {
             run: Arc::new(move |input| {
                 let (input_, result) = (self.run)(input.clone());
                 match result {
                     Ok(x) => (input_, Ok(x)),
-                    Err(_) => (p2.run)(input)
+                    Err(_) => (p2.run)(input),
                 }
-            })
+            }),
         }
     }
 }
 
-fn make_input (s: String) -> ParserInput {
-    ParserInput {
-        text: s,
-        pos: 0
-    }
+fn make_input(s: String) -> ParserInput {
+    ParserInput { text: s, pos: 0 }
 }
 
-fn run<A> (p: Parser<A>, input: String) -> Result<A, ParserError> {
+fn run<A>(p: Parser<A>, input: String) -> Result<A, ParserError> {
     match (p.run)(make_input(input)) {
         (_, Ok(x)) => Ok(x),
         (input, Err(desc)) => Err(ParserError {
-            desc,
-            pos: input.pos
-        })
+            desc: desc.desc,
+            pos: input.pos,
+        }),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -282,7 +295,8 @@ mod tests {
         let wss = parse_while(Box::new(|x| x.is_whitespace()));
 
         let name_parser = parse_while(Box::new(|x| x.is_alphanumeric()));
-        let entry_parser = (wss.clone() >> name_parser.clone() << wss.clone() << prefix("=")) + (wss.clone() >> name_parser.clone());
+        let entry_parser = (wss.clone() >> name_parser.clone() << wss.clone() << prefix("="))
+            + (wss.clone() >> name_parser.clone());
 
         let parsed = run(entry_parser, input);
         assert_eq!(parsed, Ok(("key1".to_string(), "value1".to_string())));
@@ -325,10 +339,13 @@ mod tests {
         let parser = any_char();
         let parsed = run(parser, "".to_string());
 
-        assert_eq!(parsed, Err(ParserError{
-            desc: format!("expected any char, got none (input.len() = {}", 0).to_string(),
-            pos: 0
-        }));
+        assert_eq!(
+            parsed,
+            Err(ParserError {
+                desc: format!("expected any char, got none (input.len() = {}", 0).to_string(),
+                pos: 0
+            })
+        );
     }
 
     #[test]
@@ -345,10 +362,13 @@ mod tests {
         let parser = many_exact(3, any_char());
 
         let parsed = run(parser, input);
-        assert_eq!(parsed, Err(ParserError{
-            desc: format!("expected any char, got none (input.len() = {}", 0).to_string(),
-            pos: 2
-        }));
+        assert_eq!(
+            parsed,
+            Err(ParserError {
+                desc: format!("expected any char, got none (input.len() = {}", 0).to_string(),
+                pos: 2
+            })
+        );
     }
 
     #[test]
