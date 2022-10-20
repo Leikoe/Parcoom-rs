@@ -1,5 +1,5 @@
 # Parcoom-rs
-A rust port of Parcoom, a monadic parser combinator library written in ocaml by Tsoding
+A rust port of Parcoom, a monadic parser combinators library written in ocaml by Tsoding
 
 ## References
 - https://github.com/tsoding/parcoom
