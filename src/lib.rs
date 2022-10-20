@@ -7,7 +7,7 @@ struct Parser<'a, T> {
     run: Run<'a, T>,
 }
 
-type Run<'a, T> = Arc<dyn 'a + Fn(ParserInput) -> (ParserInput, Result<T, ParserError>)>;
+type Run<'a, T> = Arc<dyn 'a + Fn(ParserInput) -> (ParserInput, Result<T, String>)>;
 
 #[derive(Debug, Clone)]
 struct ParserInput {
@@ -97,13 +97,7 @@ fn prefix(prefix_str: &'static str) -> Parser<&str> {
                 let rest = input_sub(prefix_size, input_size - prefix_size, &input);
                 (rest, Ok(prefix_str))
             } else {
-                (
-                    input,
-                    Err(ParserError {
-                        desc: unexpected_prefix_error,
-                        pos: 0,
-                    }),
-                )
+                (input, Err(unexpected_prefix_error))
             }
         }),
     }
@@ -178,13 +172,7 @@ fn any_char<'a>() -> Parser<'a, char> {
                 let empty_input_error =
                     format!("expected any char, got none (input.len() = {n}").to_string();
 
-                (
-                    input,
-                    Err(ParserError {
-                        desc: empty_input_error,
-                        pos: 0,
-                    }),
-                )
+                (input, Err(empty_input_error))
             }
         }),
     }
@@ -275,13 +263,10 @@ fn make_input(s: String) -> ParserInput {
     ParserInput { text: s, pos: 0 }
 }
 
-fn run<A>(p: Parser<A>, input: String) -> Result<A, ParserError> {
+fn run<A>(p: Parser<A>, input: String) -> Result<A, String> {
     match (p.run)(make_input(input)) {
         (_, Ok(x)) => Ok(x),
-        (input, Err(desc)) => Err(ParserError {
-            desc: desc.desc,
-            pos: input.pos,
-        }),
+        (input, Err(desc)) => Err(desc),
     }
 }
 
